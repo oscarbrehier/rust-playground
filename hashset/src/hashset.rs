@@ -1,4 +1,5 @@
 use crate::Iter;
+use std::borrow::Borrow;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -12,7 +13,7 @@ fn create_buckets<T>(size: usize) -> Vec<Vec<T>> {
     std::iter::repeat_with(Vec::new).take(size).collect()
 }
 
-impl<T: Hash + Eq + fmt::Debug + Clone> fmt::Debug for HashSet<T> {
+impl<T: Hash + Eq + fmt::Debug> fmt::Debug for HashSet<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
     }
@@ -27,13 +28,13 @@ impl<T: Hash + Eq + Clone> Clone for HashSet<T> {
     }
 }
 
-impl<T: Hash + Eq + Clone> Default for HashSet<T> {
+impl<T: Hash + Eq> Default for HashSet<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Hash + Eq + Clone> FromIterator<T> for HashSet<T> {
+impl<T: Hash + Eq> FromIterator<T> for HashSet<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut set = Self::new();
 
@@ -47,7 +48,7 @@ impl<T: Hash + Eq + Clone> FromIterator<T> for HashSet<T> {
 
 impl<T> HashSet<T>
 where
-    T: Hash + Eq + Clone,
+    T: Hash + Eq,
 {
     pub fn new() -> Self {
         Self {
@@ -63,9 +64,7 @@ where
     }
 
     pub fn insert(&mut self, value: T) -> bool {
-        let load = (self.len() + 1) as f64 / (self.capacity() + 1) as f64;
-
-        if load > 0.75 {
+        if (self.size + 1) * 4 > self.buckets.len() * 3 {
             self.resize();
         }
 
@@ -82,16 +81,33 @@ where
         true
     }
 
-    pub fn contains(&self, value: &T) -> bool {
-        let index = self.hash(&value);
-        self.buckets[index].iter().any(|v| v == value)
+    pub fn contains<Q>(&self, value: &Q) -> bool
+    where
+        Q: Hash + Eq + ?Sized,
+        T: Borrow<Q>,
+    {
+        let index = {
+            let mut hasher = DefaultHasher::new();
+            value.hash(&mut hasher);
+            (hasher.finish() as usize) % self.buckets.len()
+        };
+        self.buckets[index].iter().any(|v| v.borrow() == value)
     }
 
-    pub fn remove(&mut self, value: &T) -> bool {
-        let index = self.hash(&value);
+    pub fn remove<Q>(&mut self, value: &Q) -> bool
+    where
+        Q: Hash + Eq + ?Sized,
+        T: Borrow<Q>,
+    {
+        let index = {
+            let mut hasher = DefaultHasher::new();
+            value.hash(&mut hasher);
+            (hasher.finish() as usize) % self.buckets.len()
+        };
+
         let bucket = &mut self.buckets[index];
 
-        if let Some(pos) = bucket.iter().position(|v| v == value) {
+        if let Some(pos) = bucket.iter().position(|v| v.borrow() == value) {
             bucket.remove(pos);
             self.size -= 1;
             return true;
@@ -123,12 +139,12 @@ where
         let new_capacity = self.buckets.len() * 2;
         let mut new_buckets = create_buckets::<T>(new_capacity);
 
-        for bucket in &self.buckets {
-            for value in bucket {
+        for bucket in &mut self.buckets {
+            for value in std::mem::take(bucket) {
                 let mut hasher = DefaultHasher::new();
                 value.hash(&mut hasher);
                 let new_index = (hasher.finish() as usize) % new_capacity;
-                new_buckets[new_index].push(value.clone());
+                new_buckets[new_index].push(value);
             }
         }
 
